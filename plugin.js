@@ -1,0 +1,364 @@
+// Sync-Gram (unofficial, not affiliated with Telegram): Kino's cross-device sync through a Telegram bot the person
+// creates with @BotFather.
+//
+// Kino encrypts the snapshot and hands this plugin an opaque blob (base64). The plugin sends it to the person's private
+// chat with their bot as a document (sendDocument, multipart/form-data), pins it, and removes the previous one. The
+// pinned document's message_id is the version: before uploading, the plugin reads the chat's pinned message (getChat)
+// and throws "conflict" if it is not the version Kino last pulled, and after pinning it checks again that its copy is
+// the current one (two devices pushing at once: the loser removes its copy and throws "conflict").
+//
+// Only api.telegram.org is ever reached, and the bot token only ever travels in the URL path, as the Bot API requires.
+// The sync key is derived by Kino from the "botToken" setting (manifest: sync.keySecret), so this plugin and Telegram
+// CAN read the synced data: that is why the install screen says so in red.
+
+const API = "https://api.telegram.org";
+const FILE_NAME = "kino-sync.bin";
+const PENDING = "pendingChat"; // the chat "Check the message in the chat" offered, until it is confirmed (10 minutes)
+const LINKED = "linkedChat"; // the chat the person confirmed
+const OFFSET = "updatesOffset"; // getUpdates' next offset, so read updates are acknowledged and never read twice
+const PENDING_TTL_MS = 10 * 60 * 1000;
+const TOKEN_SHAPE = /^(\d{5,15}):[A-Za-z0-9_-]{30,}$/;
+
+const es = () => !String(kino.lang || "es").toLowerCase().startsWith("en");
+const t = (esText, enText) => (es() ? esText : enText);
+
+// --- Secrets never leave in a text ---
+
+/** [text] without the bot token, or anything shaped like one, or the "bot<token>" piece of a Bot API path. */
+function scrub(text) {
+  let s = String(text == null ? "" : text);
+  const token = String(kino.config.get("botToken") || "").trim();
+  if (token) s = s.split(token).join("…");
+  const secret = token.includes(":") ? token.slice(token.indexOf(":") + 1) : "";
+  if (secret.length >= 8) s = s.split(secret).join("…");
+  return s.replace(/\d{5,15}:[A-Za-z0-9_-]{20,}/g, "…").replace(/\/(file\/)?bot[^/\s)]*/g, "/$1bot…");
+}
+
+/** A typed error for Kino that also keeps the person's sentence where this plugin can read it back (`say`). */
+function fail(code, detail, say) {
+  const d = scrub(detail).slice(0, 200);
+  const e = say ? kino.error(code, d, { userMessage: say }) : kino.error(code, d);
+  try { e.say = say || null; } catch (_) { /* a frozen error just has no sentence */ }
+  return e;
+}
+
+// --- Settings ---
+
+function token() {
+  const raw = String(kino.config.get("botToken") || "").trim();
+  if (!raw) throw fail("auth_required", "botToken missing", t("Falta el token del bot que te dio @BotFather.", "The bot token from @BotFather is missing."));
+  const m = TOKEN_SHAPE.exec(raw);
+  if (!m) throw fail("auth_required", "botToken malformed", t("Ese no parece un token de bot: cópialo otra vez de @BotFather.", "That does not look like a bot token: copy it again from @BotFather."));
+  return { token: raw, botId: m[1] };
+}
+
+/** A private chat's id is the person's positive user id: a whole number within JavaScript's safe range. */
+function chatIdOf(value) {
+  const s = String(value == null ? "" : value).trim();
+  if (!/^[1-9]\d{0,15}$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+function readJson(key) {
+  try {
+    const v = kino.storage.get(key);
+    return v ? JSON.parse(v) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * The chat to sync with: the "chatId" setting when it holds one (typed, or received from another device), else the chat
+ * the person confirmed with this same bot. Null when there is none yet.
+ */
+function chat(botId) {
+  const typed = String(kino.config.get("chatId") || "").trim();
+  if (typed) {
+    const id = chatIdOf(typed);
+    if (id === null) throw fail("auth_required", "chatId setting is not a private chat id", t("El id del chat no es válido: déjalo vacío y toca Verificar mensaje en el chat.", "The chat id is not valid: leave it empty and tap Check the message in the chat."));
+    return { id, name: null };
+  }
+  const linked = readJson(LINKED);
+  if (linked && linked.bot === botId && chatIdOf(linked.id) !== null) return { id: chatIdOf(linked.id), name: linked.name || null };
+  return null;
+}
+
+function needChat() {
+  const tk = token();
+  const c = chat(tk.botId);
+  if (!c) throw fail("auth_required", "no linked chat", t("Falta vincular tu chat: escríbele a tu bot y toca Verificar mensaje en el chat.", "Your chat is not linked yet: write to your bot and tap Check the message in the chat."));
+  return { ...tk, chat: c };
+}
+
+// --- The Bot API ---
+
+/** Telegram's answer to a failed call, in words the person can act on. Never the token, never Telegram's raw text to them. */
+function apiError(method, status, body) {
+  const desc = String((body && body.description) || "");
+  const detail = `telegram ${method} ${status}: ${desc}`;
+  if (status === 429) {
+    const after = Math.max(1, Math.min(86400, Number(body && body.parameters && body.parameters.retry_after) || 0)) || 1;
+    return fail("rate_limited", detail, t(`Telegram pide esperar ${after} s antes de seguir. Kino lo intentará de nuevo.`, `Telegram asks to wait ${after} s before going on. Kino will try again.`));
+  }
+  if (status === 401 || status === 404) return fail("auth_required", detail, t("Telegram no reconoce el token del bot. Cópialo otra vez de @BotFather.", "Telegram does not recognise the bot token. Copy it again from @BotFather."));
+  if (status === 403) return fail("auth_required", detail, t("Tu bot está bloqueado o no lo has iniciado: ábrelo en Telegram y toca Iniciar o Desbloquear.", "Your bot is blocked or was never started: open it in Telegram and tap Start or Unblock."));
+  if (status === 400 && /chat not found|chat_id is empty|user not found/i.test(desc)) {
+    return fail("auth_required", detail, t("Telegram no encuentra tu chat: escríbele a tu bot y vuelve a tocar Verificar mensaje en el chat.", "Telegram cannot find your chat: write to your bot and tap Check the message in the chat again."));
+  }
+  if (status === 409) return fail("unavailable", detail, t("Otro programa lee este bot (un webhook u otro getUpdates). Usa un bot solo para Kino.", "Another program reads this bot (a webhook or another getUpdates). Use a bot only for Kino."));
+  if (status === 413) return fail("unavailable", detail, t("La copia es demasiado grande para Telegram.", "The copy is too large for Telegram."));
+  if (status >= 500) return fail("unavailable", detail, t("Telegram no responde ahora. Kino lo intentará de nuevo.", "Telegram is not answering right now. Kino will try again."));
+  return fail("unavailable", detail, t(`Telegram respondió ${status}.`, `Telegram answered ${status}.`));
+}
+
+/** kino.fetch with its failures in the person's words (and never the address, which holds the token). */
+async function send(url, init, method) {
+  try {
+    return await kino.fetch(url, { redirect: "manual", cookies: false, ...init });
+  } catch (e) {
+    const code = e && e.code;
+    if (code === "rate_limited") return Promise.reject(fail("rate_limited", "kino.fetch budget", t("Demasiadas consultas seguidas: Kino lo intentará de nuevo.", "Too many requests in a row: Kino will try again.")));
+    if (code === "too_large") return Promise.reject(fail("unavailable", `${method}: too large for kino.fetch`, t("La copia es demasiado grande para este plugin.", "The copy is too large for this plugin.")));
+    return Promise.reject(fail("unavailable", `${method}: ${code || "network"}`, t("No se pudo llegar a Telegram. Revisa la conexión a internet.", "Could not reach Telegram. Check the internet connection.")));
+  }
+}
+
+/** One Bot API method; answers its `result` or throws what [apiError] makes of Telegram's answer. */
+async function api(tk, method, params, { body = null, headers = {}, timeoutMs = 10000 } = {}) {
+  const r = await send(`${API}/bot${tk}/${method}`, {
+    method: "POST",
+    headers: body ? headers : { "Content-Type": "application/json" },
+    body: body || { json: params || {} },
+    timeoutMs,
+  }, method);
+  let data = null;
+  try { data = r.json(); } catch (_) { data = null; }
+  if (!r.ok || !data || data.ok !== true) throw apiError(method, r.status, data);
+  return data.result;
+}
+
+/**
+ * The chat's most recent pinned message as our copy, or null. Only a document this bot sent under [FILE_NAME] is ours:
+ * anything else pinned (the person's own message or file, another file name) is never read, deleted or unpinned, and
+ * `foreign` says it is there, over whatever copy may lie beneath it.
+ */
+async function pinnedCopy(tk, chatId) {
+  const info = await api(tk, "getChat", { chat_id: chatId });
+  const m = info && info.pinned_message;
+  if (!m) return { info, copy: null, foreign: false };
+  const botId = Number(String(tk).split(":")[0]);
+  const ours = m.document && m.document.file_id && m.document.file_name === FILE_NAME && m.from && m.from.id === botId;
+  if (!ours) return { info, copy: null, foreign: true };
+  return { info, copy: { version: String(m.message_id), fileId: m.document.file_id, size: Number(m.document.file_size) || null }, foreign: false };
+}
+
+// --- Base64 and the multipart body ---
+
+/** Text as UTF-8 bytes in a "binary string" (one char per byte), what btoa encodes. */
+function utf8Binary(text) {
+  const bytes = new TextEncoder().encode(text);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return s;
+}
+
+function blobBytes(blob) {
+  return (blob.length / 4) * 3 - (blob.endsWith("==") ? 2 : blob.endsWith("=") ? 1 : 0);
+}
+
+/**
+ * The sendDocument body as base64, built without ever decoding the blob: kino.fetch sends a `{ base64 }` body's bytes as
+ * they are, so the multipart framing is spliced around the blob's own base64. The text before the file is made a
+ * multiple of 3 bytes long (by the boundary's length), so its base64 ends cleanly and the blob's base64 follows it
+ * as is; only the blob's last 4 characters are decoded, joined to the closing boundary and encoded again.
+ */
+function multipart(fields, blob) {
+  const seed = kino.crypto.randomBytes(12, "hex");
+  for (let pad = 0; pad < 3; pad++) {
+    const boundary = "KinoSync" + seed + "x".repeat(pad);
+    let head = "";
+    for (const [k, v] of fields) head += `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`;
+    head += `--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="${FILE_NAME}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const headBin = utf8Binary(head);
+    if (headBin.length % 3 !== 0) continue;
+    const tail = atob(blob.slice(-4)) + `\r\n--${boundary}--\r\n`;
+    return { contentType: `multipart/form-data; boundary=${boundary}`, base64: btoa(headBin) + blob.slice(0, -4) + btoa(tail) };
+  }
+  // Every boundary character is counted once per part (four parts), so one of three lengths always fits.
+  throw kino.error("unavailable", "multipart framing did not align");
+}
+
+// --- Sync ---
+
+/** The pinned copy and its version, or null when the chat holds none yet. */
+export async function syncPull({ maxBlobBytes } = {}) {
+  const { token: tk, chat: c } = needChat();
+  const { copy } = await pinnedCopy(tk, c.id);
+  if (!copy) return null;
+  const tooBig = () => fail("unavailable", "pinned document over maxBlobBytes", t("La copia guardada en Telegram es más grande de lo que Kino acepta.", "The copy saved in Telegram is larger than Kino accepts."));
+  if (maxBlobBytes && copy.size && copy.size > maxBlobBytes) throw tooBig();
+  const file = await api(tk, "getFile", { file_id: copy.fileId });
+  if (!file || !file.file_path) throw fail("unavailable", "getFile without file_path", t("Telegram no entregó la copia guardada.", "Telegram did not hand over the saved copy."));
+  if (maxBlobBytes && file.file_size && file.file_size > maxBlobBytes) throw tooBig();
+  const path = String(file.file_path).split("/").map(encodeURIComponent).join("/");
+  const r = await send(`${API}/file/bot${tk}/${path}`, { method: "GET", timeoutMs: 30000 }, "download");
+  if (!r.ok) throw apiError("download", r.status, null);
+  const blob = r.base64();
+  if (maxBlobBytes && blobBytes(blob) > maxBlobBytes) throw tooBig();
+  return { blob, version: copy.version };
+}
+
+/** Uploads the blob as a document, pins it, then removes the previous copy. "conflict" when the pinned copy moved. */
+export async function syncPush({ blob, expectedVersion, maxBlobBytes } = {}) {
+  if (typeof blob !== "string" || blob.length < 4 || blob.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(blob)) throw kino.error("invalid_request", "no blob");
+  if (maxBlobBytes && blobBytes(blob) > maxBlobBytes) throw kino.error("invalid_request", "blob over maxBlobBytes");
+  const { token: tk, chat: c } = needChat();
+  const expected = expectedVersion == null ? "" : String(expectedVersion);
+  const before = (await pinnedCopy(tk, c.id)).copy;
+  if ((before ? before.version : "") !== expected) throw kino.error("conflict", `the pinned copy is ${before ? before.version : "none"}, not ${expected || "none"}`);
+
+  const body = multipart([
+    ["chat_id", String(c.id)],
+    ["disable_notification", "true"],
+    ["caption", t("Copia de sincronización de Kino. No la borres ni la desfijes.", "Kino sync copy. Do not delete or unpin it.")],
+  ], blob);
+  const sent = await api(tk, "sendDocument", null, { body: { base64: body.base64 }, headers: { "Content-Type": body.contentType }, timeoutMs: 30000 });
+  const id = sent && sent.message_id;
+  if (!Number.isSafeInteger(id)) throw fail("unavailable", "sendDocument without message_id", t("Telegram no confirmó la copia.", "Telegram did not confirm the copy."));
+  const drop = async (messageId) => {
+    try { await api(tk, "deleteMessage", { chat_id: c.id, message_id: messageId }); return true; } catch (_) { return false; }
+  };
+  try {
+    await api(tk, "pinChatMessage", { chat_id: c.id, message_id: id, disable_notification: true });
+  } catch (e) {
+    await drop(id);
+    throw e;
+  }
+  // Two devices may have pushed at once: the chat's most recent pinned message decides who won.
+  const after = (await pinnedCopy(tk, c.id)).copy;
+  if (!after || after.version !== String(id)) {
+    await drop(id);
+    throw kino.error("conflict", "another copy was pinned meanwhile");
+  }
+  // The previous copy: deleted, or (Telegram deletes only messages under 48 hours old) at least unpinned.
+  if (before && !(await drop(Number(before.version)))) {
+    try { await api(tk, "unpinChatMessage", { chat_id: c.id, message_id: Number(before.version) }); } catch (_) { /* an old pin left behind is harmless */ }
+  }
+  return { version: String(id) };
+}
+
+/** Cheap: getChat (or getMe before a chat is linked). Never downloads the copy. */
+export async function syncStatus() {
+  try {
+    const tk = token();
+    const c = chat(tk.botId);
+    if (!c) {
+      const me = await api(tk.token, "getMe", {});
+      const bot = me && me.username ? "@" + me.username : t("Tu bot", "Your bot");
+      return { ready: false, message: t(`${bot} está listo. Falta tu chat: escríbele y toca Verificar mensaje en el chat.`, `${bot} is ready. Your chat is missing: write to it and tap Check the message in the chat.`) };
+    }
+    const { info, copy, foreign } = await pinnedCopy(tk.token, c.id);
+    const who = info && info.username ? `@${info.username}, ` : "";
+    const where = `(${who}${t("id", "id")} ${c.id})`;
+    if (foreign) {
+      return {
+        ready: true,
+        message: t("Hay un mensaje tuyo fijado encima de la copia: desfíjalo en el chat con tu bot. Mientras, Kino guarda una copia nueva.",
+          "A message of yours is pinned over the copy: unpin it in the chat with your bot. Meanwhile Kino saves a new copy."),
+      };
+    }
+    return {
+      ready: true,
+      message: copy
+        ? t(`Conectado con tu chat ${where}. Hay una copia guardada.`, `Connected to your chat ${where}. A copy is saved.`)
+        : t(`Conectado con tu chat ${where}. Aún no hay copia guardada.`, `Connected to your chat ${where}. No copy saved yet.`),
+    };
+  } catch (e) {
+    return { ready: false, message: (e && e.say) || t("No se pudo consultar Telegram.", "Could not ask Telegram.") };
+  }
+}
+
+// --- The settings form (Conectar) ---
+
+export async function settingsStatus() {
+  return { status: (await syncStatus()).message };
+}
+
+// What Kino refuses in a link candidate (control, invisible formatting, separators, odd spaces, blank fillers).
+const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}ᅟᅠㅤﾠ⠀]|(?! )\p{Zs}/gu;
+
+/** How the person is shown in "Is this you?": @username, else their name, cleaned to what Kino accepts (1..64 chars). */
+function candidateOf(from, id) {
+  const raw = from.username ? "@" + from.username : [from.first_name, from.last_name].filter(Boolean).join(" ");
+  const clean = Array.from(String(raw).replace(UNSAFE, "").replace(/ {2,}/g, " ").trim()).slice(0, 64).join("").trim();
+  return clean || t(`la cuenta ${id}`, `account ${id}`);
+}
+
+async function findChat() {
+  let tk;
+  try { tk = token(); } catch (e) { return { message: e.say }; }
+  const pending = readJson(PENDING);
+  let updates;
+  try {
+    const offset = Number(kino.storage.get(OFFSET)) || 0;
+    updates = await api(tk.token, "getUpdates", { ...(offset ? { offset } : {}), timeout: 0, limit: 100, allowed_updates: ["message"] });
+  } catch (e) {
+    return { message: (e && e.say) || t("No se pudo consultar Telegram.", "Could not ask Telegram.") };
+  }
+  let found = null;
+  let last = 0;
+  for (const u of Array.isArray(updates) ? updates : []) {
+    if (Number.isSafeInteger(u && u.update_id) && u.update_id > last) last = u.update_id;
+    const m = u && u.message;
+    // Only a person writing to the bot in private: the chat is theirs (its id is their user id).
+    if (!m || !m.chat || m.chat.type !== "private" || !m.from || m.from.is_bot || m.from.id !== m.chat.id) continue;
+    const id = chatIdOf(m.chat.id);
+    if (id !== null) found = { id, name: candidateOf(m.from, id) };
+  }
+  // The next getUpdates starts after what was read here, which tells Telegram those updates are done.
+  if (last) kino.storage.set(OFFSET, String(last + 1));
+  const offer = found || (pending && pending.bot === tk.botId && chatIdOf(pending.id) !== null ? { id: chatIdOf(pending.id), name: pending.name } : null);
+  if (!offer) {
+    return { message: t("Aún no hay mensajes: abre tu bot en Telegram, toca Iniciar, escríbele algo y vuelve a tocar Verificar mensaje en el chat.", "No messages yet: open your bot in Telegram, tap Start, write it something and tap Check the message in the chat again.") };
+  }
+  kino.storage.set(PENDING, JSON.stringify({ id: offer.id, bot: tk.botId, name: offer.name }), { ttlMs: PENDING_TTL_MS });
+  return {
+    message: t(`Te escribió ${offer.name}. Confirma que eres tú.`, `${offer.name} wrote to your bot. Confirm it is you.`),
+    link: { candidate: offer.name, confirm: "confirmChat" },
+  };
+}
+
+/** Runs only after the person confirmed Kino's "Is this you?": links the chat "Check the message in the chat" offered, nothing else. */
+function confirmChat() {
+  const refuse = { message: t("Primero escríbele a tu bot y toca Verificar mensaje en el chat.", "First write to your bot and tap Check the message in the chat.") };
+  let tk;
+  try { tk = token(); } catch (e) { return { message: e.say }; }
+  const pending = readJson(PENDING);
+  const id = pending ? chatIdOf(pending.id) : null;
+  if (!pending || pending.bot !== tk.botId || id === null) return refuse;
+  kino.storage.set(LINKED, JSON.stringify({ id, bot: tk.botId, name: String(pending.name || "") }));
+  kino.storage.remove(PENDING);
+  // Kino saves it into the "chatId" setting as if typed (setSettings), so it syncs and pairing can hand it to another
+  // device. Only the chat id: the token is the person's to type and never goes back through an answer.
+  return {
+    message: t(`Listo: Kino usará tu chat con ${pending.name} (id ${id}).`, `Done: Kino will use your chat with ${pending.name} (id ${id}).`),
+    setSettings: { chatId: String(id) },
+  };
+}
+
+export async function action(key) {
+  if (key === "findChat") return findChat();
+  if (key === "confirmChat") return confirmChat();
+  return { message: t("Nada que hacer.", "Nothing to do.") };
+}
+
+export async function validateSettings(values) {
+  const out = {};
+  const tk = String(values.botToken || "").trim();
+  if (tk && !TOKEN_SHAPE.test(tk)) out.botToken = t("Ese no parece un token de bot: son números, dos puntos y unas 35 letras. Cópialo de @BotFather.", "That does not look like a bot token: digits, a colon and about 35 letters. Copy it from @BotFather.");
+  const id = String(values.chatId || "").trim();
+  if (id && chatIdOf(id) === null) out.chatId = t("Debe ser el número de tu chat privado con el bot (sin signo menos), o quedar vacío.", "It must be the number of your private chat with the bot (no minus sign), or stay empty.");
+  return Object.keys(out).length ? out : null;
+}

@@ -1,0 +1,132 @@
+{
+  "id": "sync-gram",
+  "name": "Sync-Gram",
+  "version": "1.0.1",
+  "apiVersion": 12,
+  "entry": "plugin.js",
+  "description": "Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú; la copia queda fijada en tu chat con el bot. No oficial: sin relación con Telegram. (Unofficial: not affiliated with Telegram.)",
+  "author": "Kino",
+  "homepage": "https://github.com/kinotvapp/kino-plugin-sync-gram",
+  "icon": "icon.png",
+  "hosts": [
+    "api.telegram.org"
+  ],
+  "capabilities": [
+    "syncProvider"
+  ],
+  "settings": [
+    {
+      "key": "start",
+      "label": "1. Abre BotFather",
+      "labelEn": "1. Open BotFather",
+      "type": "section",
+      "hint": "Abre @BotFather, envía /newbot y sigue los pasos: te dará un token.",
+      "hintEn": "Open @BotFather, send /newbot and follow the steps: it gives you a token.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "steps",
+      "type": "help",
+      "title": "Qué necesitas",
+      "titleEn": "What you need",
+      "body": "1. Abre @BotFather, envía /newbot y sigue los pasos.\n2. Pega el token que te da en Token del bot y toca Guardar.\n3. En Telegram abre tu bot, toca Iniciar y escríbele cualquier cosa. Luego toca Verificar mensaje en el chat y confirma que eres tú.\n\nSilencia el chat del bot en Telegram para que las copias no te avisen.\n\nNo oficial: sin relación con Telegram.",
+      "bodyEn": "1. Open @BotFather, send /newbot and follow the steps.\n2. Paste the token it gives you into Bot token and tap Save.\n3. In Telegram open your bot, tap Start and write it anything. Then tap Check the message in the chat and confirm it is you.\n\nMute the bot's chat in Telegram so the copies don't notify you.\n\nUnofficial: not affiliated with Telegram.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "botfather",
+      "type": "link",
+      "label": "Abrir @BotFather",
+      "labelEn": "Open @BotFather",
+      "url": "https://t.me/BotFather",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "bot",
+      "label": "2. Escribe el token de Telegram",
+      "labelEn": "2. Enter the Telegram token",
+      "type": "section",
+      "hint": "Pega el token que te dio @BotFather y toca Guardar. Es como una contraseña: no lo compartas.",
+      "hintEn": "Paste the token @BotFather gave you and tap Save. It is like a password: do not share it.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "botToken",
+      "label": "Token del bot",
+      "labelEn": "Bot token",
+      "type": "password",
+      "hint": "El que te dio @BotFather: 123456789:AAH…",
+      "hintEn": "The one @BotFather gave you: 123456789:AAH…",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "link",
+      "label": "3. Escríbele cualquier cosa a tu bot",
+      "labelEn": "3. Write your bot anything",
+      "type": "section",
+      "hint": "En Telegram abre tu bot, toca Iniciar y escríbele algo. Luego toca Verificar mensaje en el chat y confirma que eres tú; los mensajes de otros se ignoran. Silencia el chat del bot en Telegram para que las copias no te avisen.",
+      "hintEn": "In Telegram open your bot, tap Start and write it anything. Then tap Check the message in the chat and confirm it is you; other people's messages are ignored. Mute the bot's chat in Telegram so the copies don't notify you.",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "findChat",
+      "label": "Verificar mensaje en el chat",
+      "labelEn": "Check the message in the chat",
+      "type": "action",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "confirmChat",
+      "label": "Confirmar el chat",
+      "labelEn": "Confirm the chat",
+      "type": "action",
+      "linkOnly": true
+    },
+    {
+      "key": "chatId",
+      "label": "Id del chat",
+      "labelEn": "Chat id",
+      "type": "text",
+      "hint": "Se llena solo al confirmar tu chat; cámbialo solo si sabes cuál es",
+      "hintEn": "Filled in when you confirm your chat; change it only if you know it",
+      "devices": [
+        "phone"
+      ]
+    },
+    {
+      "key": "status",
+      "label": "Estado",
+      "labelEn": "Status",
+      "type": "status"
+    }
+  ],
+  "sync": {
+    "mode": "poll",
+    "pullEveryMs": 600000,
+    "pushDebounceMs": 300000,
+    "maxBlobBytes": 4194304,
+    "keySecret": "botToken",
+    "provision": [
+      "botToken",
+      "chatId"
+    ]
+  },
+  "signature": {
+    "authorKey": "82b87b938e0a95b142467c815a8823cb54310a13a828c3c4c77b1eda43294ae6",
+    "value": "31d57abb136aaa7b79785c55d31c412dc7ed04795d7067e97d1f94a7c41795b4e0d5313fcca7d4be0ab6e2407a65af3b1c633d1adf5e328e1696a4b9e39e2200"
+  }
+}
