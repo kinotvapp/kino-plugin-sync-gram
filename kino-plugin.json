@@ -1,7 +1,7 @@
 {
   "id": "sync-gram",
   "name": "Sync-Gram",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "apiVersion": 14,
   "entry": "plugin.js",
   "description": "Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú; la copia queda fijada en tu chat con el bot. No oficial: sin relación con Telegram. (Unofficial: not affiliated with Telegram.)",
@@ -62,6 +62,6 @@
   },
   "signature": {
     "authorKey": "82b87b938e0a95b142467c815a8823cb54310a13a828c3c4c77b1eda43294ae6",
-    "value": "774b9c5d57977f89f0f29ce6ac8ee8ea3a85bcbadba88b9a8abe4010a38f62d91c2f8abef1a64af8502643e18bceddac3b7bfb516dabcb38859c5fa75e65c500"
+    "value": "8634157b6be302058efad2e0402337a159bce999d1463f9d9ca4689e1ca0c1f0f307c2a6decf1b3902a428b319c48ef0a85dfdd96d4cb38e8d902cbb3252d008"
   }
 }

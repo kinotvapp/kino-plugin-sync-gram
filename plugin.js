@@ -456,12 +456,17 @@ function tvSteps(st, state) {
 
 export async function screen({ state = {} } = {}) {
   const st = stage();
+  // The page scrolls: on a TV a tall step would otherwise end under the screen's edge, out of the remote's reach.
   return {
-    type: "Column",
-    padding: { compact: 16, expanded: 32 },
-    gap: 12,
+    type: "SingleChildScrollView",
+    key: "page",
     every: { ms: TICK_MS, event: "tick" },
-    children: [text("Sync-Gram", "Sync-Gram", "h1"), text("Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú.", "Sync your Kino devices through a Telegram bot you create yourself."), isTv() ? tvSteps(st, state) : phoneSteps(st, state)],
+    children: [{
+      type: "Column",
+      padding: { compact: 16, expanded: 32 },
+      gap: 12,
+      children: [text("Sync-Gram", "Sync-Gram", "h1"), text("Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú.", "Sync your Kino devices through a Telegram bot you create yourself."), isTv() ? tvSteps(st, state) : phoneSteps(st, state)],
+    }],
   };
 }
 

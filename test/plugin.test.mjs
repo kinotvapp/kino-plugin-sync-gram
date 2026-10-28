@@ -92,7 +92,7 @@ test("manifestValidatesUnderTheKitAndKeySecretRules", async () => {
   assert.deepEqual(MANIFEST.hosts, ["api.telegram.org"]);
   assert.equal(MANIFEST.fetchHosts, undefined, "only api.telegram.org, never any host");
   assert.equal(MANIFEST.apiVersion, 14);
-  assert.equal(MANIFEST.version, "1.1.0");
+  assert.equal(MANIFEST.version, "1.1.1");
   // Sync-Gram: its own name and icon, and it says it is not Telegram's.
   assert.equal(MANIFEST.id, "sync-gram");
   assert.equal(MANIFEST.name, "Sync-Gram");
