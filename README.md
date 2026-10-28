@@ -78,33 +78,31 @@ itself.
 
 ## 4. Connect: paste the token, write to your bot, confirm it is you
 
-1. Tap **Connect**. The plugin's form opens on the phone as three numbered steps: *1. Open BotFather*,
-   *2. Enter the Telegram token* and *3. Write your bot anything*. Under step 1:
-   - **Help** opens a short note with what you need (a bot token from @BotFather, then write to your
-     bot and confirm it is you).
-   - **Open @BotFather** opens BotFather in the Telegram app (on a TV, Kino shows the address and a QR
-     to open it on your phone). Kino itself makes no request to that address.
-2. Paste the token into **Bot token** and tap **Save**. The **Status** line says
-   *@ana_kino_sync_bot is ready. Your chat is missing: write to it and tap Check the message in the chat.*
-3. In Telegram, open **your bot** and write it anything (`hi` is fine).
-4. Back in Kino, tap **Check the message in the chat**. The plugin reads the messages your bot received and takes the
-   most recent one written to it **in private by a person**. Messages in groups, from channels or
+1. Tap **Connect**, then **Set up** on the plugin's page. Its own screen opens, one step at a time (Kino 0.9.74 or later):
+   - **Step 1, create your bot:** **Open @BotFather** opens BotFather in the Telegram app (on a TV, Kino shows the
+     address and a QR to open it on your phone). Kino itself makes no request to that address.
+2. **Step 2, paste the token:** paste it into **Bot token** and tap **Save**. A token with the wrong shape is flagged
+   before it is saved. The screen moves to step 3 by itself.
+3. **Step 3, write to your bot:** in Telegram, open **your bot** (the screen has an **Open @your_bot** button) and
+   write it anything (`hi` is fine). There is nothing to tap in Kino: the screen listens by itself while it is open and
+   takes the most recent message written to the bot **in private by a person**. Messages in groups, from channels or
    from other bots are ignored.
-   - Nothing yet? It says *No messages yet: open your bot in Telegram, tap Start, write it something
-     and tap Check the message in the chat again.*
-5. Kino asks with its own question: **"Is this you, @ana?"** (your Telegram username, or your name
-   if you have none). It has **Yes, it's me** and **Cancel**.
+4. The screen asks **"@ana wrote to your bot. Is this you?"** (your Telegram username, or your name if you have none),
+   with **Yes, it is me** and **It is not me**.
    - **Compare that name with your own Telegram account** (in Telegram: Settings, your username under
-     your name). Anyone who finds your bot can write to it; if the name is not yours, tap **Cancel**,
-     write to your bot again and tap **Check the message in the chat** again.
-   - **Cancel** links nothing.
-   - **Yes, it's me** links that chat, and only the chat you confirm is ever used: someone who writes
-     to your bot later is never used. The plugin remembers the chat it offered for 10 minutes; after that, tap **Find my
-     chat** again.
-6. The status line says *Connected to your chat (@ana, id 401234567). No copy saved yet.*
+     your name). Anyone who finds your bot can write to it; if the name is not yours, tap **It is not me** and
+     write to your bot again.
+   - **It is not me** links nothing.
+   - **Yes, it is me** links that chat, and only the chat you confirm is ever used: someone who writes
+     to your bot later is never used. A person heard by the screen is never linked by itself, only by your tap.
+5. The screen says *Connected to your chat (@ana, id 401234567). No copy saved yet.*
    Kino also fills in the **Chat id** field with that number and saves it, as if you had typed it:
-   you type nothing, and **Send to another device** (step 5) has everything it needs.
-7. Go back. The first sync runs at once: the row says *Synced a moment ago*, and your chat with the
+   you type nothing, and **Send to another device** (step 5) has everything it needs. **Change chat** (and the
+   *Advanced* section, with the token and the chat id) are there when you need another chat.
+6. Go back. The first sync runs at once: the row says *Synced a moment ago*, and your chat with the
+   bot now shows a pinned file, `kino-sync.bin`, with the text *Kino sync copy. Do not delete or
+   unpin it.* The plugin sends and pins it silently. Mute the bot's chat in Telegram so the copies
+   don't notify you (the screen reminds you).
    bot now shows a pinned file, `kino-sync.bin`, with the text *Kino sync copy. Do not delete or
    unpin it.* The plugin sends and pins it silently. Mute the bot's chat in Telegram so the copies
    don't notify you.
@@ -157,7 +155,7 @@ the token and the chat id with **Receive from another device**.
 - **What the plugin sends where:** only to `api.telegram.org`, over https. The token goes in the
   address path, which is how the Bot API works (`https://api.telegram.org/bot<token>/<method>`). The
   plugin never puts the token in an error or status message.
-- **What the plugin reads in Telegram:** while you tap **Check the message in the chat**, the messages people sent to
+- **What the plugin reads in Telegram:** while the setup screen is open and no chat is linked, the messages people sent to
   your bot (to find yours); after that, only the pinned file of your chat.
 
 ### Changing (rotating) the token
@@ -166,7 +164,7 @@ Do it if the token leaked, or to cut off a device you lost.
 
 1. In @BotFather send `/revoke`, pick your bot, and copy the **new** token. The old one stops
    working at once.
-2. On one device: **Connect**, paste the new token, **Save**. The chat id does not change.
+2. On one device: **Connect**, **Set up**, open *Advanced*, paste the new token, **Save**. The chat id does not change.
 3. Kino now finds a copy it cannot open (*The token does not match, or the saved data is not
    Kino's*). Tap **Reset sync** and confirm. The pinned copy is replaced by this device's copy, made
    with the new token.
@@ -187,14 +185,14 @@ Do it if the token leaked, or to cut off a device you lost.
 
 | What you see | What it means and what to do |
 | --- | --- |
-| *The token is missing: set it in Connect* | This device has no token. Tap **Connect** and paste it. |
+| *The token is missing…* | This device has no token. Tap **Connect**, then **Set up**, and paste it. |
 | Status: *Telegram does not recognise the bot token. Copy it again from @BotFather.* | The token is wrong, incomplete, or was revoked. In @BotFather send `/token` (or `/revoke` for a new one), copy it whole, paste it again. |
 | Under the field: *That does not look like a bot token…* | Copy only the token line from BotFather: digits, a colon and the rest, with no spaces and no `bot` in front. |
-| Status: *…Your chat is missing: write to it and tap Check the message in the chat.* | The token works, but no chat is linked yet. Do step 4. |
-| *No messages yet…* after **Check the message in the chat** | The bot received nothing yet. Open the bot in Telegram, tap **Start**, write it something, then tap **Check the message in the chat** again. |
+| Status: *…Your chat is missing: write to your bot and open Set up.* | The token works, but no chat is linked yet. Do step 3 of the setup screen. |
+| *No messages yet…* on the setup screen | The bot received nothing yet. Open the bot in Telegram, tap **Start** and write it something: the screen finds it by itself. |
 | *Another program reads this bot (a webhook or another getUpdates).* | Telegram answered `409`: the bot is connected to another program or service. Create a new bot only for Kino (step 1), or remove that program's webhook. |
 | *Your bot is blocked or was never started…* | You blocked the bot, or never tapped **Start**. Open it in Telegram and tap **Start** or **Unblock**. |
-| *Telegram cannot find your chat: write to your bot and tap Check the message in the chat again.* | The chat id is wrong for this bot (a typo in **Chat id**, a different bot's token, or you deleted the chat). Write to the bot, tap **Check the message in the chat** and confirm: Kino fills in **Chat id** again. |
+| *Telegram cannot find your chat: write to your bot and open Set up.* | The chat id is wrong for this bot (a typo in **Chat id**, a different bot's token, or you deleted the chat). Open **Set up**, tap **Change chat**, write to the bot and confirm: Kino fills in **Chat id** again. |
 | *Telegram asks to wait 37 s before going on. Kino will try again.* | Telegram's rate limit (`429`). Nothing to do: Kino retries later. If you see it often, check that no other program uses the same bot. |
 | *The last sync failed: another device was saving at the same time, it will try again* | Two devices pushed at once, or the pinned copy changed since this device last read it. Kino pulls, merges and pushes again on its own. |
 | The row says *Waiting for the first sync* and the chat shows no pinned file | No copy was pushed yet. Tap **Sync now**. |

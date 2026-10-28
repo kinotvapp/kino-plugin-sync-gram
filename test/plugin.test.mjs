@@ -11,6 +11,7 @@ import { createKino } from "../sdk/kino-shim.mjs";
 import { loadPlugin } from "../sdk/sandbox.mjs";
 import { validate } from "../sdk/validate.mjs";
 import { checkSettingsOutput, checkSyncAnswer, validateManifest } from "../sdk/contract.mjs";
+import { checkScreenTree } from "../sdk/screen.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = join(HERE, "..");
@@ -23,7 +24,7 @@ const ANA = { id: 401234567, username: "ana_kino", first_name: "Ana" };
 const API = "https://api.telegram.org";
 const quiet = { log() {}, info() {}, warn() {}, error() {} };
 
-async function rig({ token = TOKEN, chatId = undefined, lang = "es-CO", syncCall = false, mock = {} } = {}) {
+async function rig({ token = TOKEN, chatId = undefined, lang = "es-CO", syncCall = false, mock = {}, device = undefined } = {}) {
   const tg = createTelegramMock({ token: TOKEN, ...mock });
   await new Promise((r) => tg.server.listen(0, "127.0.0.1", r));
   const local = `http://127.0.0.1:${tg.server.address().port}`;
@@ -36,7 +37,8 @@ async function rig({ token = TOKEN, chatId = undefined, lang = "es-CO", syncCall
   const config = {};
   if (token !== null) config.botToken = token;
   if (chatId !== undefined) config.chatId = chatId;
-  const { kino } = createKino(MANIFEST, { config, fetchImpl, lang, syncCall });
+  const made = createKino(MANIFEST, { config, fetchImpl, lang, syncCall });
+  const kino = device ? Object.freeze({ ...made.kino, device }) : made.kino;
   let plugin;
   try {
     ({ plugin } = await loadPlugin(join(PLUGIN_DIR, "plugin.js"), kino, { console: quiet }));
@@ -44,6 +46,22 @@ async function rig({ token = TOKEN, chatId = undefined, lang = "es-CO", syncCall
     await new Promise((r) => tg.server.close(r));
     throw e;
   }
+  // The screen's events as the old form's actions, so one set of link scenarios covers both: "findChat" is the timer's tick
+  // (the screen listens by itself), "confirmChat" the "Sí, soy yo" press.
+  const event = async (name) => plain((await plugin.screenEvent({ name, state: {}, device: "phone" })) ?? null);
+  plugin.action = async (key) => {
+    if (key === "findChat") {
+      const a = await event("tick");
+      const st = (a && a.state) || {};
+      return { message: st.line || "", ...(st.candidate ? { link: { candidate: st.candidate, confirm: "confirmChat" } } : {}) };
+    }
+    if (key === "confirmChat") {
+      const a = await event("confirm");
+      return { message: a.state.msg, ...(a.config ? { setSettings: a.config } : {}) };
+    }
+    return { message: "" };
+  };
+  plugin.settingsStatus = async () => ({ status: (await plugin.syncStatus()).message });
   const ctx = { maxBlobBytes: MANIFEST.sync.maxBlobBytes };
   return { plugin, tg, seen, ctx, kino, close: () => new Promise((r) => tg.server.close(r)) };
 }
@@ -65,15 +83,16 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
 const b64 = (s) => Buffer.from(s).toString("base64");
 const caught = async (p) => { try { await p; return null; } catch (e) { return e; } };
 const methods = (r) => r.tg.state.calls.map((c) => c.method);
-const action = (r, key) => r.plugin.action(key).then((v) => checkSettingsOutput("action", plain(v ?? null), MANIFEST, (t) => t, () => {}, key));
+const action = (r, key) => r.plugin.action(key).then((v) => plain(v ?? null));
 
 test("manifestValidatesUnderTheKitAndKeySecretRules", async () => {
   const v = await validate(PLUGIN_DIR);
   assert.equal(v.ok, true, v.problems.join("\n"));
-  assert.deepEqual(MANIFEST.capabilities, ["syncProvider"]);
+  assert.deepEqual(MANIFEST.capabilities, ["syncProvider", "screen"]);
   assert.deepEqual(MANIFEST.hosts, ["api.telegram.org"]);
   assert.equal(MANIFEST.fetchHosts, undefined, "only api.telegram.org, never any host");
-  assert.equal(MANIFEST.apiVersion, 12);
+  assert.equal(MANIFEST.apiVersion, 14);
+  assert.equal(MANIFEST.version, "1.1.0");
   // Sync-Gram: its own name and icon, and it says it is not Telegram's.
   assert.equal(MANIFEST.id, "sync-gram");
   assert.equal(MANIFEST.name, "Sync-Gram");
@@ -84,14 +103,8 @@ test("manifestValidatesUnderTheKitAndKeySecretRules", async () => {
   assert.equal(icon.subarray(1, 4).toString("latin1"), "PNG");
   assert.equal(icon.readUInt32BE(16), icon.readUInt32BE(20), "a square icon");
   assert.ok(statSync(join(PLUGIN_DIR, "icon.png")).size <= 128 * 1024, "at most 128 KB");
-  // Configuration aids: one short help (what is needed) and the link to @BotFather.
-  const help = MANIFEST.settings.filter((x) => x.type === "help");
-  assert.equal(help.length, 1);
-  for (const body of [help[0].body, help[0].bodyEn]) {
-    assert.ok(body && body.length <= 600, "a few lines, not a manual");
-    assert.match(body, /BotFather/);
-  }
-  assert.deepEqual(MANIFEST.settings.filter((x) => x.type === "link").map((x) => [x.label, x.labelEn, x.url]), [["Abrir @BotFather", "Open @BotFather", "https://t.me/BotFather"]]);
+  // The setup is a screen opened from the settings page, which then shows only its button.
+  assert.deepEqual(MANIFEST.screen, { label: "Sync-Gram", labelEn: "Sync-Gram", opensFrom: ["settings"], settingsIn: "screen", settingsButton: { label: "Configurar", labelEn: "Set up" } });
   // The install sheet says in red that the plugin and its service (Telegram) can read the synced data.
   assert.ok(v.consent.some((l) => l.danger && /podrán leerlos/.test(l.text)), JSON.stringify(v.consent));
   assert.deepEqual(MANIFEST.sync, { mode: "poll", pullEveryMs: 600000, pushDebounceMs: 300000, maxBlobBytes: 4194304, keySecret: "botToken", provision: ["botToken", "chatId"] });
@@ -99,26 +112,9 @@ test("manifestValidatesUnderTheKitAndKeySecretRules", async () => {
   assert.equal(token.type, "password");
   assert.equal(token.default, undefined);
   assert.equal(MANIFEST.settings.find((s) => s.key === "chatId").type, "text");
-  for (const key of ["findChat", "confirmChat"]) {
-    const s = MANIFEST.settings.find((x) => x.key === key);
-    assert.equal(s.type, "action");
-    assert.equal(s.confirm, undefined, "a link target may not have its own confirm question");
-  }
-  // Task 16: the phone form reads as three numbered steps (its section titles), and the TV draws none of the setup: it
-  // receives botToken and chatId with "Recibir desde otro aparato"; only the status line shows there.
-  assert.deepEqual(MANIFEST.settings.filter((x) => x.type === "section").map((x) => [x.label, x.labelEn]), [
-    ["1. Abre BotFather", "1. Open BotFather"],
-    ["2. Escribe el token de Telegram", "2. Enter the Telegram token"],
-    ["3. Escríbele cualquier cosa a tu bot", "3. Write your bot anything"],
-  ]);
-  assert.deepEqual(MANIFEST.settings.map((x) => x.key), ["start", "steps", "botfather", "bot", "botToken", "link", "findChat", "confirmChat", "chatId", "status"]);
-  for (const x of MANIFEST.settings) assert.deepEqual(x.devices, ["status", "confirmChat"].includes(x.key) ? undefined : ["phone"], x.key);
-  // The bot cannot mute its own chat (a per-person Telegram setting): the setup tells the person to, in both languages.
-  const step3 = MANIFEST.settings.find((x) => x.key === "link");
-  assert.match(step3.hint, /Silencia el chat del bot en Telegram para que las copias no te avisen\./);
-  assert.match(step3.hintEn, /Mute the bot's chat in Telegram so the copies don't notify you\./);
-  assert.match(help[0].body, /Silencia el chat del bot/);
-  assert.match(help[0].bodyEn, /Mute the bot's chat/);
+  // Only the two values stay as settings; the steps, the chat search and the confirmation live in the screen.
+  assert.deepEqual(MANIFEST.settings.map((x) => x.key), ["botToken", "chatId"]);
+  for (const x of MANIFEST.settings) assert.deepEqual(x.devices, ["phone"], x.key);
   // The keySecret rules, as Kino refuses them: the key of a password setting, no default, inside provision, 4 MiB at most.
   const variant = (f) => { const m = JSON.parse(MANIFEST_TEXT); f(m); return validateManifest(JSON.stringify(m)); };
   assert.equal(validateManifest(MANIFEST_TEXT).ok, true);
@@ -366,7 +362,7 @@ test("confirmStoresOnlyTheOfferedChat", async () => {
     const chatsAsked = r.tg.state.calls.filter((c) => c.method === "getChat").map((c) => c.params.chat_id);
     assert.deepEqual([...new Set(chatsAsked)], [String(ANA.id)]);
     // The offer is used up: a second confirm without a new find is refused.
-    assert.match((await action(r, "confirmChat")).message, /Verificar mensaje en el chat/);
+    assert.match((await action(r, "confirmChat")).message, /aparezca aquí|abre Configurar/);
   } finally { await r.close(); }
 });
 
@@ -375,7 +371,7 @@ test("confirmWithoutAPendingLinkIsRefused", async () => {
   try {
     r.tg.userWrites(ANA);
     const got = await action(r, "confirmChat");
-    assert.match(got.message, /Verificar mensaje en el chat/);
+    assert.match(got.message, /aparezca aquí|abre Configurar/);
     assert.equal(got.setSettings, undefined, "nothing is filled without an offer");
     assert.equal((await r.plugin.syncStatus(null)).ready, false);
     assert.equal(r.tg.state.calls.some((c) => c.method === "getUpdates"), false, "confirm never reads getUpdates itself");
@@ -385,7 +381,7 @@ test("confirmWithoutAPendingLinkIsRefused", async () => {
     try {
       for (const k of r.kino.storage.keys()) other.kino.storage.set(k, r.kino.storage.get(k));
       const refused = await action(other, "confirmChat");
-      assert.match(refused.message, /Verificar mensaje en el chat/);
+      assert.match(refused.message, /aparezca aquí|abre Configurar/);
       assert.equal(refused.setSettings, undefined);
     } finally { await other.close(); }
   } finally { await r.close(); }
@@ -443,8 +439,8 @@ test("errorsNeverContainTheToken", async () => {
   try {
     r.tg.state.echoPathInErrors = true;
     r.tg.state.chats.delete(ANA.id);
-    for (const p of [r.plugin.syncPull(r.ctx), r.plugin.syncPush({ ...r.ctx, blob: b64("z"), expectedVersion: null })]) {
-      const e = await caught(p);
+    for (const run of [() => r.plugin.syncPull(r.ctx), () => r.plugin.syncPush({ ...r.ctx, blob: b64("z"), expectedVersion: null })]) {
+      const e = await caught(run());
       assert.ok(e, "an error");
       assert.equal(e.code, "auth_required");
       assert.equal(leaks(e), false, e.message);
@@ -518,7 +514,7 @@ test("status lines: no token, a token with no linked chat, a blocked bot, Englis
     const s = plain(await nochat.plugin.syncStatus(null));
     assert.equal(s.ready, false);
     assert.match(s.message, /@kino_sync_test_bot/);
-    assert.match(s.message, /Verificar mensaje en el chat/);
+    assert.match(s.message, /aparezca aquí|abre Configurar/);
     assert.deepEqual(methods(nochat), ["getMe"]);
     assert.equal((await caught(nochat.plugin.syncPush({ ...nochat.ctx, blob: b64("x"), expectedVersion: null })))?.code, "auth_required");
   } finally { await nochat.close(); }
@@ -533,7 +529,7 @@ test("status lines: no token, a token with no linked chat, a blocked bot, Englis
   try {
     const s = plain(await en.plugin.syncStatus(null));
     assert.match(s.message, /^Connected/);
-    assert.match((await action(en, "confirmChat")).message, /Check the message in the chat/);
+    assert.match((await action(en, "confirmChat")).message, /wait for it to show up here/);
   } finally { await en.close(); }
 });
 
@@ -554,14 +550,99 @@ test("setup texts read well inside the Connect form and on the provider row: the
   }
 });
 
-test("one button: the confirm action is linkOnly (only Kino's \"¿Eres tú?\" runs it) and the button verifies the message", () => {
-  const confirm = MANIFEST.settings.find((x) => x.key === "confirmChat");
-  assert.equal(confirm.linkOnly, true);
-  assert.equal(confirm.devices, undefined, "never drawn anywhere: no device list needed");
-  const find = MANIFEST.settings.find((x) => x.key === "findChat");
-  assert.deepEqual([find.label, find.labelEn], ["Verificar mensaje en el chat", "Check the message in the chat"]);
-  assert.doesNotMatch(MANIFEST_TEXT + readFileSync(join(PLUGIN_DIR, "plugin.js"), "utf8"), /Buscar mi chat|Find my chat|Usar el chat encontrado|Use the chat found/);
+const walk = (n, f) => { if (n && typeof n === "object") { f(n); for (const c of n.children || []) walk(c, f); for (const it of n.items || []) for (const c of it.children || []) walk(c, f); } };
+const shown = (tree) => {
+  const out = { settings: [], buttons: [], texts: [], every: tree.every };
+  walk(tree, (n) => {
+    if (n.type === "settings") out.settings.push(...n.keys);
+    else if (n.type === "ElevatedButton" || n.type === "TextButton") out.buttons.push(n.labelText);
+    else if (n.type === "Text") out.texts.push(n.text);
+  });
+  return out;
+};
+const view = async (r, state = {}, device = "phone") => {
+  const tree = plain(await r.plugin.screen({ state, device }));
+  assert.deepEqual(checkScreenTree(tree, "es", undefined, { settings: undefined }).dropped, [], "Kino keeps every node of the tree");
+  return shown(tree);
+};
+
+test("the screen by stage: the token first, then the chat, then connected; two languages on every text", async () => {
+  const none = await rig({ token: null });
+  try {
+    const v = await view(none);
+    assert.deepEqual([v.buttons, v.settings], [["Abrir @BotFather"], ["botToken"]]);
+    assert.deepEqual(v.every, { ms: 4000, event: "tick" });
+    const tree = plain(await none.plugin.screen({ state: {} }));
+    walk(tree, (n) => { if (n.type === "Text" && !n.style?.startsWith?.("body")) assert.ok(n.textEn && n.textEn !== n.text || n.text === "Sync-Gram", n.text); });
+  } finally { await none.close(); }
+  const nochat = await rig();
+  try {
+    const v = await view(nochat);
+    assert.deepEqual(v.buttons, []);
+    assert.deepEqual(v.settings, ["botToken"], "the token can be changed from here");
+    assert.ok(v.texts.some((x) => /Escríbele a tu bot/.test(x)));
+  } finally { await nochat.close(); }
+  const connected = await linked();
+  try {
+    const v = await view(connected);
+    assert.deepEqual([v.buttons, v.settings], [["Revisar el estado", "Cambiar de chat"], ["botToken", "chatId"]]);
+  } finally { await connected.close(); }
 });
+
+test("the chat is found by itself while the screen is open; the person confirms it, declines it, or changes chat", async () => {
+  const r = await rig();
+  try {
+    const ev = async (name, state = {}) => plain((await r.plugin.screenEvent({ name, state, device: "phone" })) ?? null);
+    const quiet = await ev("tick");
+    assert.equal(quiet.state.bot, "kino_sync_test_bot");
+    assert.equal(quiet.state.candidate, null);
+    r.tg.userWrites(ANA);
+    const heard = await ev("tick", { bot: "kino_sync_test_bot" });
+    assert.equal(heard.state.candidate, "@ana_kino");
+    const v = await view(r, { bot: "kino_sync_test_bot", candidate: "@ana_kino" });
+    assert.deepEqual(v.buttons, ["Abrir @kino_sync_test_bot", "Sí, soy yo", "No soy yo"]);
+    assert.ok(v.texts.some((x) => /@ana_kino\. ¿Eres tú\?/.test(x)));
+    // Nothing is linked by being heard: only the press does it.
+    assert.equal((await ev("tick", { bot: "kino_sync_test_bot" })).state.candidate, "@ana_kino");
+    assert.equal(plain(await r.plugin.syncStatus(null)).ready, false);
+    // "No soy yo": the waiting candidate is dropped.
+    await ev("decline");
+    assert.equal((await ev("tick", { bot: "kino_sync_test_bot" })).state.candidate, null);
+    r.tg.userWrites(ANA);
+    await ev("tick", { bot: "kino_sync_test_bot" });
+    const done = await ev("confirm");
+    assert.deepEqual(done.config, { chatId: String(ANA.id) });
+    assert.match(done.state.msg, /Listo: Kino usará tu chat con @ana_kino/);
+    // Cambiar de chat: the link and the setting go, and the screen listens again.
+    const out = await ev("change");
+    assert.deepEqual(out.config, { chatId: null });
+  } finally { await r.close(); }
+});
+
+test("a screen's timer never links a chat: confirm needs a waiting candidate the same bot offered", async () => {
+  const r = await rig();
+  try {
+    const refused = plain(await r.plugin.screenEvent({ name: "confirm", state: {}, device: "phone" }));
+    assert.equal(refused.config, undefined);
+    assert.match(refused.state.msg, /escríbele a tu bot/);
+  } finally { await r.close(); }
+});
+
+test("the TV draws no setup: a status line, and nothing that asks for anything", async () => {
+  const r = await rig({ token: null, device: "tv" });
+  try {
+    const v = await view(r, {}, "tv");
+    assert.deepEqual([v.buttons, v.settings], [[], []]);
+    assert.ok(v.texts.some((x) => /Recibir configuración/.test(x)));
+  } finally { await r.close(); }
+});
+
+test("the setup says to mute the bot's chat, in both languages", async () => {
+  const src = readFileSync(join(PLUGIN_DIR, "plugin.js"), "utf8");
+  assert.match(src, /Silencia el chat del bot en Telegram para que las copias no te avisen\./);
+  assert.match(src, /Mute the bot's chat in Telegram so the copies don't notify you\./);
+});
+
 
 test("validateSettings checks the token's shape and the chat id", async () => {
   const r = await rig();

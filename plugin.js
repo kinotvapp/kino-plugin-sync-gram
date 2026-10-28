@@ -13,7 +13,7 @@
 
 const API = "https://api.telegram.org";
 const FILE_NAME = "kino-sync.bin";
-const PENDING = "pendingChat"; // the chat "Check the message in the chat" offered, until it is confirmed (10 minutes)
+const PENDING = "pendingChat"; // the chat the screen offered, until it is confirmed (10 minutes)
 const LINKED = "linkedChat"; // the chat the person confirmed
 const OFFSET = "updatesOffset"; // getUpdates' next offset, so read updates are acknowledged and never read twice
 const PENDING_TTL_MS = 10 * 60 * 1000;
@@ -77,7 +77,7 @@ function chat(botId) {
   const typed = String(kino.config.get("chatId") || "").trim();
   if (typed) {
     const id = chatIdOf(typed);
-    if (id === null) throw fail("auth_required", "chatId setting is not a private chat id", t("El id del chat no es válido: déjalo vacío y toca Verificar mensaje en el chat.", "The chat id is not valid: leave it empty and tap Check the message in the chat."));
+    if (id === null) throw fail("auth_required", "chatId setting is not a private chat id", t("El id del chat no es válido: abre Configurar y cambia de chat.", "The chat id is not valid: open Set up and change the chat."));
     return { id, name: null };
   }
   const linked = readJson(LINKED);
@@ -88,7 +88,7 @@ function chat(botId) {
 function needChat() {
   const tk = token();
   const c = chat(tk.botId);
-  if (!c) throw fail("auth_required", "no linked chat", t("Falta vincular tu chat: escríbele a tu bot y toca Verificar mensaje en el chat.", "Your chat is not linked yet: write to your bot and tap Check the message in the chat."));
+  if (!c) throw fail("auth_required", "no linked chat", t("Falta vincular tu chat: escríbele a tu bot y abre Configurar.", "Your chat is not linked yet: write to your bot and open Set up."));
   return { ...tk, chat: c };
 }
 
@@ -105,7 +105,7 @@ function apiError(method, status, body) {
   if (status === 401 || status === 404) return fail("auth_required", detail, t("Telegram no reconoce el token del bot. Cópialo otra vez de @BotFather.", "Telegram does not recognise the bot token. Copy it again from @BotFather."));
   if (status === 403) return fail("auth_required", detail, t("Tu bot está bloqueado o no lo has iniciado: ábrelo en Telegram y toca Iniciar o Desbloquear.", "Your bot is blocked or was never started: open it in Telegram and tap Start or Unblock."));
   if (status === 400 && /chat not found|chat_id is empty|user not found/i.test(desc)) {
-    return fail("auth_required", detail, t("Telegram no encuentra tu chat: escríbele a tu bot y vuelve a tocar Verificar mensaje en el chat.", "Telegram cannot find your chat: write to your bot and tap Check the message in the chat again."));
+    return fail("auth_required", detail, t("Telegram no encuentra tu chat: escríbele a tu bot y abre Configurar.", "Telegram cannot find your chat: write to your bot and open Set up."));
   }
   if (status === 409) return fail("unavailable", detail, t("Otro programa lee este bot (un webhook u otro getUpdates). Usa un bot solo para Kino.", "Another program reads this bot (a webhook or another getUpdates). Use a bot only for Kino."));
   if (status === 413) return fail("unavailable", detail, t("La copia es demasiado grande para Telegram.", "The copy is too large for Telegram."));
@@ -257,7 +257,7 @@ export async function syncStatus() {
     if (!c) {
       const me = await api(tk.token, "getMe", {});
       const bot = me && me.username ? "@" + me.username : t("Tu bot", "Your bot");
-      return { ready: false, message: t(`${bot} está listo. Falta tu chat: escríbele y toca Verificar mensaje en el chat.`, `${bot} is ready. Your chat is missing: write to it and tap Check the message in the chat.`) };
+      return { ready: false, message: t(`${bot} está listo. Falta tu chat: escríbele a tu bot y abre Configurar.`, `${bot} is ready. Your chat is missing: write to your bot and open Set up.`) };
     }
     const { info, copy, foreign } = await pinnedCopy(tk.token, c.id);
     const who = info && info.username ? `@${info.username}, ` : "";
@@ -280,11 +280,7 @@ export async function syncStatus() {
   }
 }
 
-// --- The settings form (Conectar) ---
-
-export async function settingsStatus() {
-  return { status: (await syncStatus()).message };
-}
+// --- The setup screen (apiVersion 14) ---
 
 // What Kino refuses in a link candidate (control, invisible formatting, separators, odd spaces, blank fillers).
 const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}ᅟᅠㅤﾠ⠀]|(?! )\p{Zs}/gu;
@@ -321,7 +317,7 @@ async function findChat() {
   if (last) kino.storage.set(OFFSET, String(last + 1));
   const offer = found || (pending && pending.bot === tk.botId && chatIdOf(pending.id) !== null ? { id: chatIdOf(pending.id), name: pending.name } : null);
   if (!offer) {
-    return { message: t("Aún no hay mensajes: abre tu bot en Telegram, toca Iniciar, escríbele algo y vuelve a tocar Verificar mensaje en el chat.", "No messages yet: open your bot in Telegram, tap Start, write it something and tap Check the message in the chat again.") };
+    return { message: t("Aún no hay mensajes: abre tu bot en Telegram, toca Iniciar y escríbele algo. Aquí aparece solo.", "No messages yet: open your bot in Telegram, tap Start and write it something. It shows up here by itself.") };
   }
   kino.storage.set(PENDING, JSON.stringify({ id: offer.id, bot: tk.botId, name: offer.name }), { ttlMs: PENDING_TTL_MS });
   return {
@@ -330,9 +326,9 @@ async function findChat() {
   };
 }
 
-/** Runs only after the person confirmed Kino's "Is this you?": links the chat "Check the message in the chat" offered, nothing else. */
+/** Runs only after the person confirmed Kino's "Is this you?": links the chat the screen offered, nothing else. */
 function confirmChat() {
-  const refuse = { message: t("Primero escríbele a tu bot y toca Verificar mensaje en el chat.", "First write to your bot and tap Check the message in the chat.") };
+  const refuse = { message: t("Primero escríbele a tu bot y espera a que aparezca aquí.", "First write to your bot and wait for it to show up here.") };
   let tk;
   try { tk = token(); } catch (e) { return { message: e.say }; }
   const pending = readJson(PENDING);
@@ -348,12 +344,6 @@ function confirmChat() {
   };
 }
 
-export async function action(key) {
-  if (key === "findChat") return findChat();
-  if (key === "confirmChat") return confirmChat();
-  return { message: t("Nada que hacer.", "Nothing to do.") };
-}
-
 export async function validateSettings(values) {
   const out = {};
   const tk = String(values.botToken || "").trim();
@@ -361,4 +351,116 @@ export async function validateSettings(values) {
   const id = String(values.chatId || "").trim();
   if (id && chatIdOf(id) === null) out.chatId = t("Debe ser el número de tu chat privado con el bot (sin signo menos), o quedar vacío.", "It must be the number of your private chat with the bot (no minus sign), or stay empty.");
   return Object.keys(out).length ? out : null;
+}
+
+// --- The screen: the setup as steps (apiVersion 14) ---
+// The token stays in Kino's own secret field (a `settings` node); the chat is found by itself while the screen is open and
+// the person confirms it with two buttons ("Is this you?"). A screen's answer to a timer cannot open a pop-up, so the
+// question is a card on the screen, never a dialog, and only the person's press links a chat.
+
+const text = (esText, enText, style) => ({ type: "Text", text: esText, textEn: enText, ...(style ? { style } : {}) });
+const button = (esText, enText, onPressed) => ({ type: "ElevatedButton", labelText: esText, labelTextEn: enText, onPressed });
+const textButton = (esText, enText, onPressed) => ({ type: "TextButton", labelText: esText, labelTextEn: enText, onPressed });
+const openUrl = (href, title) => ({ go: { url: { href, title } } });
+const card = (children) => ({ type: "Card", variant: "outlined", children: [{ type: "Column", padding: 16, gap: 12, children }] });
+const line = (s) => ({ type: "Text", text: s, style: "body" });
+const settingsNode = (...keys) => ({ type: "settings", keys });
+const isTv = () => kino.device === "tv";
+const TICK_MS = 4000;
+
+/** Where the setup stands, without asking Telegram: "noToken", "noChat" or "linked". */
+function stage() {
+  let tk;
+  try { tk = token(); } catch (_) { return "noToken"; }
+  try { return chat(tk.botId) ? "linked" : "noChat"; } catch (_) { return "noChat"; }
+}
+
+export async function screen({ state = {} } = {}) {
+  const st = stage();
+  const said = [state.msg, state.line].filter(Boolean).map(line);
+  let body;
+  if (isTv()) {
+    body = [card([
+      text("Conexión con tu bot", "Connection with your bot", "h3"),
+      ...(said.length ? said : [text("Recibe la configuración desde otro aparato: en el otro toca Enviar configuración y aquí Recibir configuración.", "Receive the setup from another device: on the other one tap Send configuration and here Receive configuration.")]),
+    ])];
+  } else if (st === "noToken") {
+    body = [card([
+      text("Paso 1 · Crea tu bot", "Step 1 · Create your bot", "h3"),
+      text("Abre @BotFather, envía /newbot y sigue los pasos: te dará un token.", "Open @BotFather, send /newbot and follow the steps: it gives you a token."),
+      button("Abrir @BotFather", "Open @BotFather", openUrl("https://t.me/BotFather", "@BotFather")),
+    ]), card([
+      text("Paso 2 · Pega el token", "Step 2 · Paste the token", "h3"),
+      text("Es como una contraseña: no lo compartas. Pégalo y toca Guardar.", "It is like a password: do not share it. Paste it and tap Save."),
+      settingsNode("botToken"),
+      ...said,
+    ])];
+  } else if (st === "noChat") {
+    const cand = state.candidate;
+    body = [card([
+      text("Paso 3 · Escríbele a tu bot", "Step 3 · Write to your bot", "h3"),
+      text("En Telegram abre tu bot, toca Iniciar y escríbele cualquier cosa. Aquí aparece solo.", "In Telegram open your bot, tap Start and write it anything. It shows up here by itself."),
+      text("Silencia el chat del bot en Telegram para que las copias no te avisen.", "Mute the bot's chat in Telegram so the copies don't notify you."),
+      ...(state.bot ? [button("Abrir @" + state.bot, "Open @" + state.bot, openUrl("https://t.me/" + state.bot, "@" + state.bot))] : []),
+      ...(cand
+        ? [text("Te escribió " + cand + ". ¿Eres tú?", cand + " wrote to your bot. Is this you?", "h3"),
+          button("Sí, soy yo", "Yes, it is me", "confirm"), textButton("No soy yo", "It is not me", "decline")]
+        : []),
+      ...said,
+    ]), { type: "ExpansionTile", key: "tokenTile", items: [{ key: "token", title: "Cambiar el token", children: [settingsNode("botToken")] }] }];
+  } else {
+    body = [card([
+      text("Conectado", "Connected", "h3"),
+      ...said,
+      text("Silencia el chat del bot en Telegram para que las copias no te avisen.", "Mute the bot's chat in Telegram so the copies don't notify you."),
+      button("Revisar el estado", "Check the status", "check"),
+      textButton("Cambiar de chat", "Change chat", "change"),
+    ]), { type: "ExpansionTile", key: "advanced", items: [{ key: "adv", title: "Avanzado", children: [settingsNode("botToken", "chatId")] }] }];
+  }
+  return {
+    type: "Column",
+    padding: { compact: 16, expanded: 32 },
+    gap: 12,
+    every: { ms: TICK_MS, event: "tick" },
+    children: [text("Sync-Gram", "Sync-Gram", "h1"), text("Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú.", "Sync your Kino devices through a Telegram bot you create yourself."), ...body],
+  };
+}
+
+export async function screenEvent({ name, state = {} } = {}) {
+  if (isTv()) {
+    if (name === "tick" && state.line) return null;
+    return name === "open" || name === "check" || name === "tick" ? { state: { line: (await syncStatus()).message } } : null;
+  }
+  const st = stage();
+  if (name === "open" || name === "check") return { state: { line: (await syncStatus()).message, msg: "" } };
+  if (name === "tick") {
+    if (st === "noToken") return { state: { bot: null, candidate: null } };
+    if (st === "linked") return state.candidate || state.bot ? { state: { candidate: null, bot: null } } : null;
+    // A token and no chat: learn the bot's name once, then listen for the person's first message.
+    let bot = state.bot || null;
+    if (!bot) {
+      try {
+        const me = await api(token().token, "getMe", {});
+        bot = me && typeof me.username === "string" && /^[A-Za-z0-9_]{3,64}$/.test(me.username) ? me.username : null;
+      } catch (e) {
+        return { state: { line: (e && e.say) || t("No se pudo consultar Telegram.", "Could not ask Telegram.") } };
+      }
+    }
+    const found = await findChat();
+    return { state: { bot, candidate: found.link ? found.link.candidate : null, line: found.link ? "" : found.message } };
+  }
+  if (name === "confirm") {
+    const done = confirmChat();
+    return { state: { msg: done.message, candidate: null, line: "" }, ...(done.setSettings ? { config: done.setSettings } : {}) };
+  }
+  if (name === "decline") {
+    kino.storage.remove(PENDING);
+    return { state: { candidate: null, msg: "" } };
+  }
+  if (name === "change") {
+    kino.storage.remove(LINKED);
+    kino.storage.remove(PENDING);
+    return { state: { candidate: null, msg: "", line: "" }, config: { chatId: null } };
+  }
+  return null;
 }
