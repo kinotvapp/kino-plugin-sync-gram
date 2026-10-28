@@ -11,6 +11,7 @@
 // a namespace object (`toScript`), so no Node flag is needed and `node --test` gets the sandbox too. Line numbers are the
 // entry's (the wrapper starts on line 1). `KINO_SDK_NO_SANDBOX=1` loads it with a plain `import()` instead (to debug with
 // Node's own tools, or if a source form defeats `toScript`).
+import { trackedExports } from "./kit-call.mjs";
 import vm from "node:vm";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -122,7 +123,7 @@ export async function loadPlugin(entryPath, kino, { console: pluginConsole = con
     try {
       const copy = join(scratch, "plugin.mjs");
       writeFileSync(copy, source);
-      return { plugin: await import(pathToFileURL(copy).href), sandboxed: false };
+      return { plugin: trackedExports(await import(pathToFileURL(copy).href)), sandboxed: false };
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -131,7 +132,7 @@ export async function loadPlugin(entryPath, kino, { console: pluginConsole = con
   const context = vm.createContext(provided, { codeGeneration: { strings: true, wasm: false } });
   vm.runInContext(ENGINE_QUIRKS, context);
   const script = new vm.Script(toScript(source), { filename: entryPath });
-  return { plugin: await script.runInContext(context), sandboxed: true };
+  return { plugin: trackedExports(await script.runInContext(context)), sandboxed: true };
 }
 
 /**
