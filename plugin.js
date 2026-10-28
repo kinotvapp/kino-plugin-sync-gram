@@ -353,20 +353,23 @@ export async function validateSettings(values) {
   return Object.keys(out).length ? out : null;
 }
 
-// --- The screen: the setup as steps (apiVersion 14) ---
-// The token stays in Kino's own secret field (a `settings` node); the chat is found by itself while the screen is open and
-// the person confirms it with two buttons ("Is this you?"). A screen's answer to a timer cannot open a pop-up, so the
-// question is a card on the screen, never a dialog, and only the person's press links a chat.
+// --- The screen: the setup as Kino's `steps` (apiVersion 14) ---
+// The token is typed in a masked field of a Form: its text reaches the event once, is checked against Telegram right
+// there, and is written to its password setting by the answer's `config`; it is never in the screen's state, a log or a
+// render. The chat is found by itself while the screen is open and the person confirms it with two buttons ("Is this
+// you?"): a timer's answer cannot open a pop-up, so the question is a card on the screen, and only the person's press
+// links a chat.
 
 const text = (esText, enText, style) => ({ type: "Text", text: esText, textEn: enText, ...(style ? { style } : {}) });
-const button = (esText, enText, onPressed) => ({ type: "ElevatedButton", labelText: esText, labelTextEn: enText, onPressed });
+const button = (esText, enText, onPressed, extra = {}) => ({ type: "ElevatedButton", labelText: esText, labelTextEn: enText, onPressed, ...extra });
 const textButton = (esText, enText, onPressed) => ({ type: "TextButton", labelText: esText, labelTextEn: enText, onPressed });
 const openUrl = (href, title) => ({ go: { url: { href, title } } });
-const card = (children) => ({ type: "Card", variant: "outlined", children: [{ type: "Column", padding: 16, gap: 12, children }] });
 const line = (s) => ({ type: "Text", text: s, style: "body" });
-const settingsNode = (...keys) => ({ type: "settings", keys });
 const isTv = () => kino.device === "tv";
 const TICK_MS = 4000;
+const TOKEN_PATTERN = "^[0-9]{5,15}:[A-Za-z0-9_-]{30,}$";
+const CHAT_ID_PATTERN = "^[1-9][0-9]{0,15}$";
+const MUTE = ["Silencia el chat del bot en Telegram para que las copias no te avisen.", "Mute the bot's chat in Telegram so the copies don't notify you."];
 
 /** Where the setup stands, without asking Telegram: "noToken", "noChat" or "linked". */
 function stage() {
@@ -375,64 +378,115 @@ function stage() {
   try { return chat(tk.botId) ? "linked" : "noChat"; } catch (_) { return "noChat"; }
 }
 
+/** Only the current step draws children: any other step's would be dropped (and logged) by Kino. */
+const onlyCurrentOpen = (item) => {
+  if (item.state === "current") return item;
+  const { children, ...rest } = item;
+  return rest;
+};
+const said = (state) => [state.msg, state.line].filter(Boolean).map(line);
+
+function phoneSteps(st, state) {
+  const editing = state.edit === "token" && st !== "noToken";
+  const at = editing || st === "noToken" ? 0 : st === "noChat" ? 1 : 2;
+  const mark = (i) => (i < at ? "done" : i === at ? "current" : "pending");
+  const cand = state.candidate;
+  return {
+    type: "steps",
+    key: "setup",
+    onStepTap: "go_back",
+    items: [
+      {
+        key: "token", title: "Tu bot", titleEn: "Your bot", subtitle: "Token guardado", subtitleEn: "Token saved", state: mark(0),
+        children: [
+          text("Abre @BotFather, envía /newbot y sigue los pasos: te dará un token. Pégalo aquí; es como una contraseña, no lo compartas.", "Open @BotFather, send /newbot and follow the steps: it gives you a token. Paste it here; it is like a password, do not share it."),
+          button("Abrir @BotFather", "Open @BotFather", openUrl("https://t.me/BotFather", "@BotFather")),
+          {
+            type: "Form", key: "tokenForm", onSubmitted: "save_token", children: [
+              { type: "TextField", key: "token", obscureText: true, required: true, maxLength: 80, pattern: TOKEN_PATTERN, errorText: "Ese no parece un token de bot: son números, dos puntos y unas 35 letras.", errorTextEn: "That does not look like a bot token: digits, a colon and about 35 letters.", labelText: "Token del bot", labelTextEn: "Bot token", hintText: "123456789:AAH…", hintTextEn: "123456789:AAH…" },
+              { type: "ElevatedButton", labelText: "Guardar", labelTextEn: "Save", submit: true },
+            ],
+          },
+          ...said(state),
+        ],
+      },
+      {
+        key: "chat", title: "Tu chat con el bot", titleEn: "Your chat with the bot", subtitle: "Vinculado", subtitleEn: "Linked", state: mark(1),
+        children: [
+          text("En Telegram abre tu bot, toca Iniciar y escríbele cualquier cosa. Aquí aparece solo.", "In Telegram open your bot, tap Start and write it anything. It shows up here by itself."),
+          text(MUTE[0], MUTE[1]),
+          ...(state.bot ? [button("Abrir @" + state.bot, "Open @" + state.bot, openUrl("https://t.me/" + state.bot, "@" + state.bot))] : []),
+          ...(cand
+            ? [text("Te escribió " + cand + ". ¿Eres tú?", cand + " wrote to your bot. Is this you?", "h3"),
+              button("Sí, soy yo", "Yes, it is me", "confirm"), textButton("No soy yo", "It is not me", "decline")]
+            : []),
+          ...said(state),
+        ],
+      },
+      {
+        key: "ready", title: "Conectado", titleEn: "Connected", state: mark(2),
+        children: [
+          ...said(state),
+          text(MUTE[0], MUTE[1]),
+          button("Revisar el estado", "Check the status", "check"),
+          textButton("Cambiar de chat", "Change chat", "change"),
+          {
+            type: "ExpansionTile", key: "advanced", items: [{ key: "adv", title: "Avanzado", titleEn: "Advanced", children: [
+              { type: "TextField", key: "chatId", bind: "chatId", kind: "number", maxLength: 16, pattern: CHAT_ID_PATTERN, errorText: "Debe ser el número de tu chat privado con el bot, o quedar vacío.", errorTextEn: "It must be the number of your private chat with the bot, or stay empty.", labelText: "Id del chat", labelTextEn: "Chat id" },
+            ] }],
+          },
+        ],
+      },
+    ].map(onlyCurrentOpen),
+  };
+}
+
+function tvSteps(st, state) {
+  const got = st !== "noToken";
+  return {
+    type: "steps",
+    key: "setup",
+    items: [
+      { key: "recv", title: "Recibir la configuración", titleEn: "Receive the setup", subtitle: "Recibida", subtitleEn: "Received", state: got ? "done" : "current",
+        children: [text("Desde tu celular: Ajustes ▸ Sincronización ▸ Enviar configuración. En esta TV: Recibir configuración.", "From your phone: Settings ▸ Sync ▸ Send configuration. On this TV: Receive configuration."), ...said(state)] },
+      { key: "ready", title: "Conectado", titleEn: "Connected", state: got ? "current" : "pending", children: said(state) },
+    ].map(onlyCurrentOpen),
+  };
+}
+
 export async function screen({ state = {} } = {}) {
   const st = stage();
-  const said = [state.msg, state.line].filter(Boolean).map(line);
-  let body;
-  if (isTv()) {
-    body = [card([
-      text("Conexión con tu bot", "Connection with your bot", "h3"),
-      ...(said.length ? said : [text("Recibe la configuración desde otro aparato: en el otro toca Enviar configuración y aquí Recibir configuración.", "Receive the setup from another device: on the other one tap Send configuration and here Receive configuration.")]),
-    ])];
-  } else if (st === "noToken") {
-    body = [card([
-      text("Paso 1 · Crea tu bot", "Step 1 · Create your bot", "h3"),
-      text("Abre @BotFather, envía /newbot y sigue los pasos: te dará un token.", "Open @BotFather, send /newbot and follow the steps: it gives you a token."),
-      button("Abrir @BotFather", "Open @BotFather", openUrl("https://t.me/BotFather", "@BotFather")),
-    ]), card([
-      text("Paso 2 · Pega el token", "Step 2 · Paste the token", "h3"),
-      text("Es como una contraseña: no lo compartas. Pégalo y toca Guardar.", "It is like a password: do not share it. Paste it and tap Save."),
-      settingsNode("botToken"),
-      ...said,
-    ])];
-  } else if (st === "noChat") {
-    const cand = state.candidate;
-    body = [card([
-      text("Paso 3 · Escríbele a tu bot", "Step 3 · Write to your bot", "h3"),
-      text("En Telegram abre tu bot, toca Iniciar y escríbele cualquier cosa. Aquí aparece solo.", "In Telegram open your bot, tap Start and write it anything. It shows up here by itself."),
-      text("Silencia el chat del bot en Telegram para que las copias no te avisen.", "Mute the bot's chat in Telegram so the copies don't notify you."),
-      ...(state.bot ? [button("Abrir @" + state.bot, "Open @" + state.bot, openUrl("https://t.me/" + state.bot, "@" + state.bot))] : []),
-      ...(cand
-        ? [text("Te escribió " + cand + ". ¿Eres tú?", cand + " wrote to your bot. Is this you?", "h3"),
-          button("Sí, soy yo", "Yes, it is me", "confirm"), textButton("No soy yo", "It is not me", "decline")]
-        : []),
-      ...said,
-    ]), { type: "ExpansionTile", key: "tokenTile", items: [{ key: "token", title: "Cambiar el token", children: [settingsNode("botToken")] }] }];
-  } else {
-    body = [card([
-      text("Conectado", "Connected", "h3"),
-      ...said,
-      text("Silencia el chat del bot en Telegram para que las copias no te avisen.", "Mute the bot's chat in Telegram so the copies don't notify you."),
-      button("Revisar el estado", "Check the status", "check"),
-      textButton("Cambiar de chat", "Change chat", "change"),
-    ]), { type: "ExpansionTile", key: "advanced", items: [{ key: "adv", title: "Avanzado", children: [settingsNode("botToken", "chatId")] }] }];
-  }
   return {
     type: "Column",
     padding: { compact: 16, expanded: 32 },
     gap: 12,
     every: { ms: TICK_MS, event: "tick" },
-    children: [text("Sync-Gram", "Sync-Gram", "h1"), text("Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú.", "Sync your Kino devices through a Telegram bot you create yourself."), ...body],
+    children: [text("Sync-Gram", "Sync-Gram", "h1"), text("Sincroniza tus aparatos de Kino a través de un bot de Telegram que creas tú.", "Sync your Kino devices through a Telegram bot you create yourself."), isTv() ? tvSteps(st, state) : phoneSteps(st, state)],
   };
 }
 
-export async function screenEvent({ name, state = {} } = {}) {
+export async function screenEvent({ name, value, arg, state = {} } = {}) {
   if (isTv()) {
     if (name === "tick" && state.line) return null;
     return name === "open" || name === "check" || name === "tick" ? { state: { line: (await syncStatus()).message } } : null;
   }
   const st = stage();
+  const form = value && typeof value === "object" ? value : {};
   if (name === "open" || name === "check") return { state: { line: (await syncStatus()).message, msg: "" } };
+  if (name === "go_back") return { state: { edit: arg === "token" ? "token" : null, msg: "" } };
+  if (name === "save_token") {
+    const typed = typeof form.token === "string" ? form.token.trim() : "";
+    if (!TOKEN_SHAPE.test(typed)) return { state: { msg: t("Ese no parece un token de bot: son números, dos puntos y unas 35 letras. Cópialo de @BotFather.", "That does not look like a bot token: digits, a colon and about 35 letters. Copy it from @BotFather.") } };
+    // Ask Telegram with the typed token before keeping it: a token that does not work is never saved.
+    let bot = null;
+    try {
+      const me = await api(typed, "getMe", {});
+      bot = me && typeof me.username === "string" && /^[A-Za-z0-9_]{3,64}$/.test(me.username) ? me.username : null;
+    } catch (e) {
+      return { state: { msg: (e && e.say) || t("No se pudo consultar Telegram.", "Could not ask Telegram.") } };
+    }
+    return { state: { msg: "", edit: null, bot, candidate: null }, config: { botToken: typed } };
+  }
   if (name === "tick") {
     if (st === "noToken") return { state: { bot: null, candidate: null } };
     if (st === "linked") return state.candidate || state.bot ? { state: { candidate: null, bot: null } } : null;

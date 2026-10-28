@@ -83,8 +83,9 @@ cuenta.
    (Kino 0.9.74 o posterior):
    - **Paso 1, crea tu bot:** **Abrir @BotFather** abre BotFather en la app de Telegram (en una TV, Kino muestra la
      dirección y un QR para abrirla en tu celular). Kino no hace ninguna petición a esa dirección.
-2. **Paso 2, pega el token:** pégalo en **Token del bot** y toca **Guardar**. Un token con forma equivocada se marca
-   antes de guardarlo. La pantalla pasa sola al paso 3.
+2. **Paso 2, pega el token:** pégalo en **Token del bot** y toca **Guardar**. El campo es oculto. Un token con forma
+   equivocada se marca antes de enviar nada, y uno que Telegram no acepta nunca se guarda: la pantalla le pregunta a
+   Telegram en el momento. Pasa sola al paso 3.
 3. **Paso 3, escríbele a tu bot:** en Telegram, abre **tu bot** (la pantalla tiene un botón **Abrir @tu_bot**) y
    escríbele cualquier cosa (`hola` sirve). No hay nada que tocar en Kino: la pantalla escucha sola mientras está
    abierta y toma el mensaje más reciente que **una persona** le escribió **en privado**. Los mensajes de grupos, de

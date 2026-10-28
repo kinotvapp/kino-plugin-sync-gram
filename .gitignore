@@ -2,3 +2,4 @@
 .kino-cookies.json
 .kino-secrets.json
 *.pem
+.kino-shared.json

@@ -552,11 +552,14 @@ test("setup texts read well inside the Connect form and on the provider row: the
 
 const walk = (n, f) => { if (n && typeof n === "object") { f(n); for (const c of n.children || []) walk(c, f); for (const it of n.items || []) for (const c of it.children || []) walk(c, f); } };
 const shown = (tree) => {
-  const out = { settings: [], buttons: [], texts: [], every: tree.every };
+  const out = { settings: [], buttons: [], texts: [], fields: [], forms: [], steps: [], every: tree.every };
   walk(tree, (n) => {
     if (n.type === "settings") out.settings.push(...n.keys);
     else if (n.type === "ElevatedButton" || n.type === "TextButton") out.buttons.push(n.labelText);
     else if (n.type === "Text") out.texts.push(n.text);
+    else if (n.type === "TextField") out.fields.push([n.key, n.obscureText === true]);
+    else if (n.type === "Form") out.forms.push(n.key);
+    else if (n.type === "steps") out.steps.push(...n.items.map((i) => i.state));
   });
   return out;
 };
@@ -566,27 +569,51 @@ const view = async (r, state = {}, device = "phone") => {
   return shown(tree);
 };
 
-test("the screen by stage: the token first, then the chat, then connected; two languages on every text", async () => {
+test("the steps by stage: the token first, then the chat, then connected; every secret masked, two languages on every text", async () => {
   const none = await rig({ token: null });
   try {
     const v = await view(none);
-    assert.deepEqual([v.buttons, v.settings], [["Abrir @BotFather"], ["botToken"]]);
+    assert.deepEqual(v.steps, ["current", "pending", "pending"]);
+    assert.deepEqual([v.buttons, v.forms, v.fields, v.settings], [["Abrir @BotFather", "Guardar"], ["tokenForm"], [["token", true]], []], "the token is typed in a masked field of a form, never in Kino's settings node");
     assert.deepEqual(v.every, { ms: 4000, event: "tick" });
     const tree = plain(await none.plugin.screen({ state: {} }));
-    walk(tree, (n) => { if (n.type === "Text" && !n.style?.startsWith?.("body")) assert.ok(n.textEn && n.textEn !== n.text || n.text === "Sync-Gram", n.text); });
+    walk(tree, (n) => { if (n.type === "Text" && n.style !== "body") assert.ok((n.textEn && n.textEn !== n.text) || n.text === "Sync-Gram", JSON.stringify(n)); });
   } finally { await none.close(); }
   const nochat = await rig();
   try {
     const v = await view(nochat);
+    assert.deepEqual(v.steps, ["done", "current", "pending"]);
     assert.deepEqual(v.buttons, []);
-    assert.deepEqual(v.settings, ["botToken"], "the token can be changed from here");
-    assert.ok(v.texts.some((x) => /Escríbele a tu bot/.test(x)));
+    assert.ok(v.texts.some((x) => /escríbele cualquier cosa/.test(x)));
   } finally { await nochat.close(); }
   const connected = await linked();
   try {
     const v = await view(connected);
-    assert.deepEqual([v.buttons, v.settings], [["Revisar el estado", "Cambiar de chat"], ["botToken", "chatId"]]);
+    assert.deepEqual(v.steps, ["done", "done", "current"]);
+    assert.deepEqual(v.buttons, ["Revisar el estado", "Cambiar de chat"]);
+    assert.deepEqual(v.fields, [["chatId", false]], "the chat id is a plain field bound to its setting, under Avanzado");
+    const back = await view(connected, { edit: "token" });
+    assert.deepEqual(back.steps, ["current", "pending", "pending"], "tapping the done token step opens it again");
   } finally { await connected.close(); }
+});
+
+test("save_token asks Telegram with the typed token before keeping it: a good one is written through config, a bad one is not", async () => {
+  const r = await rig({ token: null });
+  try {
+    const ev = async (value) => plain((await r.plugin.screenEvent({ name: "save_token", value, state: {}, device: "phone" })) ?? null);
+    const bad = await ev({ token: "12ab" });
+    assert.equal(bad.config, undefined);
+    assert.match(bad.state.msg, /no parece un token/);
+    assert.equal(r.seen.length, 0, "a token of the wrong shape never reaches the network");
+    const wrong = await ev({ token: "7712345678:AAHk3J9qXw-Zt5rLm2Pv8sYb_Nc4Ud6Ef0X" });
+    assert.equal(wrong.config, undefined, "Telegram refused it: nothing is saved");
+    assert.ok(!JSON.stringify(wrong).includes("AAHk3J9qXw"), "the typed token is never echoed");
+    const good = await ev({ token: TOKEN });
+    assert.deepEqual(good.config, { botToken: TOKEN });
+    assert.equal(good.state.bot, "kino_sync_test_bot");
+    assert.ok(!JSON.stringify(good.state).includes(SECRET), "the secret never goes into the screen's state");
+    assert.ok(r.seen.every((x) => x.url.startsWith(API + "/")), "only api.telegram.org");
+  } finally { await r.close(); }
 });
 
 test("the chat is found by itself while the screen is open; the person confirms it, declines it, or changes chat", async () => {

@@ -81,8 +81,9 @@ itself.
 1. Tap **Connect**, then **Set up** on the plugin's page. Its own screen opens, one step at a time (Kino 0.9.74 or later):
    - **Step 1, create your bot:** **Open @BotFather** opens BotFather in the Telegram app (on a TV, Kino shows the
      address and a QR to open it on your phone). Kino itself makes no request to that address.
-2. **Step 2, paste the token:** paste it into **Bot token** and tap **Save**. A token with the wrong shape is flagged
-   before it is saved. The screen moves to step 3 by itself.
+2. **Step 2, paste the token:** paste it into **Bot token** and tap **Save**. The field is masked. A token with the wrong
+   shape is flagged before anything is sent, and one Telegram does not accept is never saved: the screen asks
+   Telegram right away. It moves to step 3 by itself.
 3. **Step 3, write to your bot:** in Telegram, open **your bot** (the screen has an **Open @your_bot** button) and
    write it anything (`hi` is fine). There is nothing to tap in Kino: the screen listens by itself while it is open and
    takes the most recent message written to the bot **in private by a person**. Messages in groups, from channels or
